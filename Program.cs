@@ -118,12 +118,36 @@ internal static class Program {
     private static IReadOnlyList<char> GetHantChars() {
         IReadOnlyList<char> hansChars = GetHansChars();
 
-        List<Char> hantChars = [];
+        Dictionary<char, List<char>> stMap = [];
+        {
+            using StreamReader reader = new("STCharacters.utf8.txt", new UTF8Encoding(false));
+            while (!reader.EndOfStream) {
+                string? line = reader.ReadLine();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                string[] parts = line.Split('\t');
+                if (parts.Length == 2) {
+                    char hans = parts[0][0];
+                    string[] hantStrings = parts[1].Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    List<char> hants = hantStrings.Select(s => s[0]).ToList();
+                    stMap[hans] = hants;
+                }
+            }
+        }
+
+        List<char> hantChars = [];
         foreach (char c in hansChars) {
-            string hantStr = Strings.StrConv(c.ToString(), VbStrConv.TraditionalChinese, LocaleID: 2052);
-            Debug.Assert(hantStr.Length == 1, "Converted Hant character length should be 1");
-            char hantChar = hantStr[0];
-            hantChars.Add(hantStr[0]);
+            // Get zh-Hant character from OpenCC
+            if (stMap.TryGetValue(c, out var hants)) {
+                hantChars.AddRange(hants);
+            }
+
+            // Get zh-Hant character from VB's StrConv
+            {
+                string hantStr = Strings.StrConv(c.ToString(), VbStrConv.TraditionalChinese, LocaleID: 2052);
+                Debug.Assert(hantStr.Length == 1, "Converted Hant character length should be 1");
+                char hantChar = hantStr[0];
+                hantChars.Add(hantChar);
+            }
         }
 
         hantChars.AddRange(GetYiJianDuiDuoFanChars());

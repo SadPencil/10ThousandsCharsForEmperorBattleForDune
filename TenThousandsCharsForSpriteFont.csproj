@@ -43,6 +43,9 @@
     <None Update="level-3.utf8.txt">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
+    <None Update="STCharacters.utf8.txt">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
     <None Update="YiJianDuiDuoFan.utf8.txt">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
