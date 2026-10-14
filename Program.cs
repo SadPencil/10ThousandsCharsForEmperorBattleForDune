@@ -237,11 +237,13 @@ internal static class Program {
     private const string ExcludeFileName = "exclude.utf8.txt";
 
     /// <summary>
-    /// 游戏原 Chinese 字库的字符清单（同样固定从程序目录读取）。
-    /// 内容是从 Ui0001.RFH/RFD 里 FONT/CHINESE0..67.MAP
-    /// 提取的全部码位。
+    /// 补漏清单，同样固定从程序目录读取。
+    /// 里面列出的字符会被**无条件加入**最终输出 —— 用于收录常用字表里没有、
+    /// 但游戏文本实际会用到、且名单又漏掉的字（例如繁体异体字
+    /// 偽/為/眾/妳/墬）。它是在"排除其他字体已有字符"**之后**并入的，
+    /// 所以补漏字不会被排除逻辑删掉。
     /// </summary>
-    private const string ChineseFileName = "chineset.utf8.txt";
+    private const string ExtraFileName = "extra.utf8.txt";
 
     private static void Main() {
         Console.WriteLine("生成合并的简体 + 繁体常用字符表。");
@@ -336,8 +338,6 @@ internal static class Program {
         chars.AddRange(GetUnicodeCharsInRange(0x2312, 0x2312));
 
         // 非汉字区间定义之间不应有重复（这是原版的保护性检查）。
-        // 注意：此时还没并入 chineset.utf8.txt —— 基础集与区间集必然有重叠
-        // （12 个标点符号），那是预期的，后面会统一 Distinct 去重。
         {
             List<char> duplicateChars = chars
                 .GroupBy(c => c)
@@ -350,15 +350,11 @@ internal static class Program {
             }
         }
 
-        // ---------------------------------------------------------------
-        // 第零部分：游戏原 Chinese 字库里已有的全部字符
-        //
-        // 本工具的输出是**替换**游戏原字库，不是追加。所以必须先把原字库
-        // 覆盖到的字符全部收进来，否则替换后这些字会变成空白。
-        // ---------------------------------------------------------------
-        IReadOnlyList<char> chineseChars = ReadCodePointListFile(ChineseFileName);
-        Console.WriteLine($"游戏原 Chinese 字库字符（{ChineseFileName}）：{chineseChars.Count} 个");
-        chars.AddRange(chineseChars);
+        // 说明：本版本**不**并入 chineset.utf8.txt。
+        // 原因是引擎对 Chinese 字体有 68 页的硬上限（见 README），
+        // 而"10k 清单 + 原字库"会超出容量。实测不并入时，放弃的 8793 个字
+        // 全部是生僻异体字（GB2312/通用规范汉字表里一个都没有），
+        // 译文实际只用到其中 2 个，已由 extra.utf8.txt 补回。
 
         // 检查 GB2312 里所有非汉字字符都已包含
         {
@@ -370,7 +366,7 @@ internal static class Program {
             }
         }
 
-        Console.WriteLine($"非汉字区间字符：{chars.Count - chineseChars.Count} 个（不含第零部分）");
+        Console.WriteLine($"非汉字区间字符：{chars.Count} 个");
 
         // ---------------------------------------------------------------
         // 第二部分：简体 + 繁体汉字（原本由 --zh-Hant 二选一，现在合并输出）
@@ -385,18 +381,6 @@ internal static class Program {
         chars = chars.Distinct().ToList();
         Console.WriteLine($"合并去重后（未过滤）：{chars.Count} 个");
 
-        // 自检：替换方案下，游戏原字库的每个字都必须仍在清单里
-        {
-            HashSet<char> inList = [.. chars];
-            List<char> dropped = chineseChars.Where(c => !inList.Contains(c)).ToList();
-            if (dropped.Count > 0) {
-                throw new Exception(
-                    $"有 {dropped.Count} 个游戏原 Chinese 字库的字符不在生成清单里，"
-                    + "替换后它们会变成空白：" + string.Join(string.Empty, dropped.Take(200)));
-            }
-            Console.WriteLine($"覆盖自检通过：原字库 {chineseChars.Count} 个字符全部包含在内。");
-        }
-
         // ---------------------------------------------------------------
         // 第三部分：去掉游戏里"其他语言字体"已经提供的字符
         // ---------------------------------------------------------------
@@ -405,11 +389,26 @@ internal static class Program {
         List<char> removedChars = chars.Where(c => providedByOtherFonts.Contains(c)).ToList();
         chars = chars.Where(c => !providedByOtherFonts.Contains(c)).ToList();
 
+        // ---------------------------------------------------------------
+        // 第四部分：并入 extra.utf8.txt 里的补漏字符
+        // 放在排除之后，所以补漏字**不会被排除逻辑删掉**。
+        // ---------------------------------------------------------------
+        List<char> extraChars = ReadCodePointListFile(ExtraFileName).ToList();
+        if (extraChars.Count > 0) {
+            HashSet<char> have = [.. chars];
+            List<char> added = extraChars.Where(c => !have.Contains(c)).ToList();
+            chars.AddRange(added);
+            Console.WriteLine();
+            Console.WriteLine($"从 {ExtraFileName} 补漏：{added.Count} 个字符" +
+                              (added.Count > 0 ? "  " + string.Join(string.Empty, added) : ""));
+        }
+
         Console.WriteLine();
         Console.WriteLine($"已在其他字体中提供、因此被移除的字符：{removedChars.Count} 个");
         Console.WriteLine("  " + string.Join(string.Empty, removedChars));
         Console.WriteLine();
         Console.WriteLine($"最终字符数：{chars.Count}");
+
 
         // ---------------------------------------------------------------
         // 输出
