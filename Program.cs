@@ -1,8 +1,12 @@
-﻿using Microsoft.VisualBasic;
+using Microsoft.VisualBasic;
 using System.Diagnostics;
 using System.Text;
 
-namespace TenThousandsCharsForSpriteFont;
+// 本程序依赖 Microsoft.VisualBasic.Strings.StrConv 做简繁转换，
+// 该 API 只在 Windows 上实现（内部走 NLS），所以目标框架固定为 net48、
+// 且只能在 Windows 上运行。
+
+namespace TenThousandsCharsForEmperorBattleForDune;
 
 internal static class Program {
     private static string DisplayCharacter(char character) {
@@ -115,6 +119,27 @@ internal static class Program {
         return chars;
     }
 
+    /// <summary>
+    /// Microsoft.VisualBasic.Strings.StrConv 是否可用。
+    /// 它只在 Windows 上实现（内部依赖 NLS），非 Windows 平台调用会抛
+    /// PlatformNotSupportedException，因此先探测一次，不可用就退回只用
+    /// OpenCC 的 STCharacters 映射表。
+    /// </summary>
+    private static readonly bool SStrConvAvailable = ProbeStrConv();
+
+    private static bool ProbeStrConv() {
+        try {
+            _ = Strings.StrConv("国", VbStrConv.TraditionalChinese, LocaleID: 2052);
+            return true;
+        }
+        catch (Exception) {
+            Console.WriteLine("[提示] 当前平台不支持 Strings.StrConv（简繁转换走 NLS，仅 Windows 可用），"
+                + "将只使用 OpenCC 的 STCharacters 映射表。");
+            Console.WriteLine("       在 Windows 上运行可获得与原作者一致的完整结果。");
+            return false;
+        }
+    }
+
     private static IReadOnlyList<char> GetHantChars() {
         IReadOnlyList<char> hansChars = GetHansChars();
 
@@ -141,12 +166,14 @@ internal static class Program {
                 hantChars.AddRange(hants);
             }
 
-            // Get zh-Hant character from VB's StrConv
-            {
-                string hantStr = Strings.StrConv(c.ToString(), VbStrConv.TraditionalChinese, LocaleID: 2052);
-                Debug.Assert(hantStr.Length == 1, "Converted Hant character length should be 1");
-                char hantChar = hantStr[0];
-                hantChars.Add(hantChar);
+            // Get zh-Hant character from VB's StrConv（Windows 的 NLS 简繁转换）
+            if (SStrConvAvailable) {
+                string? hantStr = Strings.StrConv(c.ToString(), VbStrConv.TraditionalChinese, LocaleID: 2052);
+                if (hantStr is null || hantStr.Length != 1) {
+                    throw new InvalidOperationException(
+                        $"Strings.StrConv 未能把 {DisplayCharacter(c)} 转成单个繁体字（返回 {hantStr?.Length.ToString() ?? "null"} 个字符）。");
+                }
+                hantChars.Add(hantStr[0]);
             }
         }
 
@@ -172,16 +199,59 @@ internal static class Program {
         return hantChars;
     }
 
-    private static void Main(string[] args) {
-        bool zhHant = args.Length > 0 && args[0] == "--zh-Hant";
-        if (zhHant) {
-            Console.WriteLine("Generating characters for zh-Hant...");
+    /// <summary>
+    /// 读取排除清单（固定为 exclude.utf8.txt）：文件里可写普通字符，也可写
+    /// U+XXXX；空白与 BOM 忽略。内容是从 Emperor 的 MAP 文件预先提取出来的。
+    /// </summary>
+    private static ISet<int> ReadExcludeFile(string filePath) {
+        if (!File.Exists(filePath)) {
+            throw new FileNotFoundException(
+                $"找不到排除清单 {Path.GetFullPath(filePath)}。"
+                + "该文件应随程序一起放在同一目录（csproj 会把它复制到输出目录）。");
         }
-        else {
-            Console.WriteLine("Generating characters for zh-Hans...");
+        string raw = File.ReadAllText(filePath, new UTF8Encoding(false));
+        HashSet<int> result = [];
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(raw, @"[Uu]\+([0-9A-Fa-f]{1,6})")) {
+            result.Add(Convert.ToInt32(m.Groups[1].Value, 16));
         }
+        foreach (char c in raw) {
+            if (!char.IsWhiteSpace(c) && c != '\uFEFF') {
+                result.Add(c);
+            }
+        }
+        Console.WriteLine($"从 {Path.GetFileName(filePath)} 读到 {result.Count} 个已由其他字体提供的码位。");
+        return result;
+    }
+
+    /// <summary>读取字符清单文件（每行若干字符，或纯文本），丢掉空白与 BOM。</summary>
+    private static IReadOnlyList<char> ReadCodePointListFile(string filePath) {
+        string text = File.ReadAllText(filePath, new UTF8Encoding(false));
+        return text.Where(c => !char.IsWhiteSpace(c) && c != '\uFEFF').Distinct().ToList();
+    }
+
+    /// <summary>
+    /// 排除清单的文件名。固定从程序目录读取，不通过命令行指定。
+    /// 内容是从 Ui0001.RFH/RFD 里 FONT/ 下除 Chinese* 以外的所有 .MAP
+    /// 预先提取出来的码位清单。
+    /// </summary>
+    private const string ExcludeFileName = "exclude.utf8.txt";
+
+    /// <summary>
+    /// 游戏原 Chinese 字库的字符清单（同样固定从程序目录读取）。
+    /// 内容是从 Ui0001.RFH/RFD 里 FONT/CHINESE0..67.MAP
+    /// 提取的全部码位。
+    /// </summary>
+    private const string ChineseFileName = "chineset.utf8.txt";
+
+    private static void Main() {
+        Console.WriteLine("生成合并的简体 + 繁体常用字符表。");
+        Console.WriteLine();
 
         List<char> chars = [];
+
+        // ---------------------------------------------------------------
+        // 第一部分：非汉字字符（区间定义，与原版一致）
+        // ---------------------------------------------------------------
 
         // U+0020 -> U+007F: Basic Latin.
         chars.AddRange(GetUnicodeCharsInRange(0x0020, 0x007F));
@@ -195,77 +265,39 @@ internal static class Program {
         // Latin Extended-B. 0180–024F. Includes all.
         chars.AddRange(GetUnicodeCharsInRange(0x0180, 0x024F));
 
-        // U+1EA0 -> U+1EF9: Latin Extended Additional, additional letters for Vietnamese (skipped)
-
-        // Greek and Coptic. Range: 0370–03FF. Excludes reserved characters 0378, 0379, 0380, 0381, 0382, 0383, 038B, 038D, 03A2
+        // Greek and Coptic. Range: 0370–03FF. Excludes reserved characters.
         chars.AddRange(GetUnicodeCharsInRange(0x0370, 0x03FF, excluded: [0x0378, 0x0379, 0x0380, 0x0381, 0x0382, 0x0383, 0x038B, 0x038D, 0x03A2]));
 
         // U+0400 -> U+04FF: Cyrillic. Includes all.
         chars.AddRange(GetUnicodeCharsInRange(0x0400, 0x04FF));
 
-        // U+FF01 -> U+FFEE: Halfwidth and Fullwidth Forms. Excludes reserved characters FF00, FFBF, FFC0, FFC1, FFC8, FFC9, FFD0, FFD1, FFD8, FFD9, FFDD, FFDE, FFDF, FFE7, FFEF
-        // Also excludes: Halfwidth Hangul variants FFA0 -- FFDC
+        // U+FF01 -> U+FFEE: Halfwidth and Fullwidth Forms.
         chars.AddRange(
             GetUnicodeCharsInRange(0xFF01, 0xFFEE, excluded: [0xFF00, 0xFFBF, 0xFFC0, 0xFFC1, 0xFFC8, 0xFFC9, 0xFFD0, 0xFFD1, 0xFFD8, 0xFFD9, 0xFFDD, 0xFFDE, 0xFFDF, 0xFFE7, 0xFFEF])
             .Where(c => c is < (char)0xFFA0 or > (char)0xFFDC) // Exclude Halfwidth Hangul variants
         );
 
         // General Punctuation
-        // 1. Spaces. 2000 -> 200A (skipped)
-        // 2. Format characters (skipped)
-        // 3. Dashes. 2010 -> 2015
-        chars.AddRange(GetUnicodeCharsInRange(0x2010, 0x2015));
-        // 4. General punctuation. 2016 -> 2017
-        chars.AddRange(GetUnicodeCharsInRange(0x2016, 0x2017));
-        // 5. Quotation marks and apostrophe. 2018 -> 201F
-        chars.AddRange(GetUnicodeCharsInRange(0x2018, 0x201F));
-        // 6. General punctuation. 2020 -> 2027
-        chars.AddRange(GetUnicodeCharsInRange(0x2020, 0x2027));
-        // 7. Separators (skipped)
-        // 8. Format characters (skipped)
-        // 9. Space. 202F (skipped)
-        // 10.General punctuation. 2030-> 2038
-        chars.AddRange(GetUnicodeCharsInRange(0x2030, 0x2038));
-        // 11. Quotation marks. 2039 -> 203A (skipped)
-        // 12. General punctuation. 203B
-        chars.AddRange(GetUnicodeCharsInRange(0x203B, 0x203B));
-        // 13. Double punctuation for vertical text. 203C (skipped)
-        // 14. General punctuation. 203D -> 2044 (skipped)
-        // 15. Brackets. 2045 -> 2046 (skipped)
-        // 16. Double punctuation for vertical text. 2047 -> 2049 (skipped)
-        // 17. General punctuation. 204A -> 2055 (skipped)
-        // 18. Archaic punctuation. 2056. (skipped)
-        // 19. General punctuation. 2057 (skipped)
-        // 20. Archaic punctuation. 2058 -> 205E. (skipped)
-        // 21. Space. 205F (skipped)
-        // 22. Format character (skipped)
-        // 23. Invisible operators (skipped)
-        // 24. Format characters (skipped)
-        // 25. Deprecated (skipped)
+        chars.AddRange(GetUnicodeCharsInRange(0x2010, 0x2015)); // Dashes
+        chars.AddRange(GetUnicodeCharsInRange(0x2016, 0x2017)); // General punctuation
+        chars.AddRange(GetUnicodeCharsInRange(0x2018, 0x201F)); // Quotation marks and apostrophe
+        chars.AddRange(GetUnicodeCharsInRange(0x2020, 0x2027)); // General punctuation
+        chars.AddRange(GetUnicodeCharsInRange(0x2030, 0x2038)); // General punctuation
+        chars.AddRange(GetUnicodeCharsInRange(0x203B, 0x203B)); // General punctuation
 
-        //// Enclosed CJK Letters and Months. Only includes 3220 -- 325F and range 3280 -- 32FE, so Hangul characters are excluded.
-        //chars.AddRange(GetUnicodeCharsInRange(0x3220, 0x325F));
-        //chars.AddRange(GetUnicodeCharsInRange(0x3280, 0x32FE));
-
-        // Enclosed CJK Letters and Months. Only includes GB2312 characters: ㈠ (U+3220), ㈡ (U+3221), ㈢ (U+3222), ㈣ (U+3223), ㈤ (U+3224), ㈥ (U+3225), ㈦ (U+3226), ㈧ (U+3227), ㈨ (U+3228), ㈩ (U+3229)
+        // Enclosed CJK Letters and Months. Only GB2312 characters ㈠..㈩.
         chars.AddRange(GetUnicodeCharsInRange(0x3220, 0x3229));
 
-        // Number Forms. 2150 -- 218B. Only includes 2160--216B and 2170--217F
+        // Number Forms. 2160--216B and 2170--217F
         chars.AddRange(GetUnicodeCharsInRange(0x2160, 0x216B));
         chars.AddRange(GetUnicodeCharsInRange(0x2170, 0x217F));
 
-        //// Miscellaneous Symbols. 2600–26FF. Includes all.
-        //chars.AddRange(GetUnicodeCharsInRange(0x2600, 0x26FF));
-
-        // Only introduce these miscellaneous symbols. (GB2312)
+        // Miscellaneous Symbols. Only GB2312 ones.
         chars.AddRange(GetUnicodeCharsInRange(0x2605, 0x2606));
         chars.AddRange(GetUnicodeCharsInRange(0x2640, 0x2640));
         chars.AddRange(GetUnicodeCharsInRange(0x2642, 0x2642));
 
-        // Letterlike Symbols. 2100–214F. Includes all.
-        // chars.AddRange(GetUnicodeCharsInRange(0x2100, 0x214F));
-
-        // Letterlike Symbols. Only add ℃ (U+2103), № (U+2116) in GB2312. Also, add ℉(U+2109)
+        // Letterlike Symbols. Only ℃ (U+2103), № (U+2116), plus ℉ (U+2109).
         chars.AddRange(GetUnicodeCharsInRange(0x2103, 0x2103));
         chars.AddRange(GetUnicodeCharsInRange(0x2109, 0x2109));
         chars.AddRange(GetUnicodeCharsInRange(0x2116, 0x2116));
@@ -273,19 +305,19 @@ internal static class Program {
         // CJK Symbols and Punctuation. 3000–303F. Includes all.
         chars.AddRange(GetUnicodeCharsInRange(0x3000, 0x303F));
 
-        // U+3040 -> U+309F: Hiragana. Excludes reserved characters 3040, 3097, 3098. Excludes Voicing marks (3099-309C)
+        // Hiragana (excluding reserved and voicing marks)
         chars.AddRange(GetUnicodeCharsInRange(0x3040, 0x309F, excluded: [0x3040, 0x3097, 0x3098, 0x3099, 0x309A, 0x309B, 0x309C]));
 
-        // U+30A0 -> U+30FF: Katakana. Includes all.
+        // Katakana. Includes all.
         chars.AddRange(GetUnicodeCharsInRange(0x30A0, 0x30FF));
 
         // Spacing Modifier Letters. 02B0–02FF. Includes all.
         chars.AddRange(GetUnicodeCharsInRange(0x02B0, 0x02FF));
 
-        // Mathematical Operators. 2200–22FF. Includes 2022-22F1.
+        // Mathematical Operators. 2200–22F1.
         chars.AddRange(GetUnicodeCharsInRange(0x2200, 0x22F1));
 
-        // Geometric Shapes. 25A0–25FF. Includes 25A0-25EF. (Unicode 2.0)
+        // Geometric Shapes. 25A0–25EF.
         chars.AddRange(GetUnicodeCharsInRange(0x25A0, 0x25EF));
 
         // Enclosed Alphanumerics. 2460–24FF. Includes all.
@@ -297,31 +329,38 @@ internal static class Program {
         // Box Drawing. 2500–257F. Includes all.
         chars.AddRange(GetUnicodeCharsInRange(0x2500, 0x257F));
 
-        // Arrows. 2190–21FF. Includes 2190--21EA. (Unicode 2.0)
+        // Arrows. 2190–21EA.
         chars.AddRange(GetUnicodeCharsInRange(0x2190, 0x21EA));
 
-        //// Miscellaneous Technical. 2300–23FF. Includes all.
-        //chars.AddRange(GetUnicodeCharsInRange(0x2300, 0x23FF));
-
-        // Miscellaneous Technical. Only add ⌒ (U+2312) in GB2312
+        // Miscellaneous Technical. Only ⌒ (U+2312) in GB2312.
         chars.AddRange(GetUnicodeCharsInRange(0x2312, 0x2312));
 
-        // There should be no duplicate characters. Throw if there are any.
+        // 非汉字区间定义之间不应有重复（这是原版的保护性检查）。
+        // 注意：此时还没并入 chineset.utf8.txt —— 基础集与区间集必然有重叠
+        // （12 个标点符号），那是预期的，后面会统一 Distinct 去重。
         {
             List<char> duplicateChars = chars
-            .GroupBy(c => c)
-            .Where(g => g.Count() > 1)
-            .Select(g => g.Key)
-            .ToList();
+                .GroupBy(c => c)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .ToList();
 
             if (duplicateChars.Count > 0) {
                 throw new Exception($"There are {duplicateChars.Count} duplicate characters: {string.Join(", ", duplicateChars.Select(DisplayCharacter))}");
             }
         }
 
-        // U+4E00 -> U+9FFF: CJK Unified Ideographs. Can't include all of them. Will include a selected subset.
+        // ---------------------------------------------------------------
+        // 第零部分：游戏原 Chinese 字库里已有的全部字符
+        //
+        // 本工具的输出是**替换**游戏原字库，不是追加。所以必须先把原字库
+        // 覆盖到的字符全部收进来，否则替换后这些字会变成空白。
+        // ---------------------------------------------------------------
+        IReadOnlyList<char> chineseChars = ReadCodePointListFile(ChineseFileName);
+        Console.WriteLine($"游戏原 Chinese 字库字符（{ChineseFileName}）：{chineseChars.Count} 个");
+        chars.AddRange(chineseChars);
 
-        // All non-Han characters should already be included above.
+        // 检查 GB2312 里所有非汉字字符都已包含
         {
             IReadOnlyList<char> unicodeHans = GetUnicode1994HanCharacters();
             IReadOnlyList<char> gb2312NonHanChars = GetGB2312Chars().Where(c => !unicodeHans.Contains(c)).ToList();
@@ -331,40 +370,80 @@ internal static class Program {
             }
         }
 
-        if (!zhHant) {
-            // Add Chinese (Simplified) characters
-            Console.WriteLine("Before adding Hans characters, total characters: " + chars.Count);
-            var hansChars = GetHansChars();
-            chars.AddRange(hansChars);
-            chars = chars.Distinct().ToList();
-            Console.WriteLine("After adding Hans characters, total characters: " + chars.Count);
-        }
-        else {
-            // Add Chinese (Traditional) characters
-            Console.WriteLine("Before adding Hant characters, total characters: " + chars.Count);
-            var hantChars = GetHantChars();
-            chars.AddRange(hantChars);
-            chars = chars.Distinct().ToList();
-            Console.WriteLine("After adding Hant characters, total characters: " + chars.Count);
+        Console.WriteLine($"非汉字区间字符：{chars.Count - chineseChars.Count} 个（不含第零部分）");
+
+        // ---------------------------------------------------------------
+        // 第二部分：简体 + 繁体汉字（原本由 --zh-Hant 二选一，现在合并输出）
+        // ---------------------------------------------------------------
+        IReadOnlyList<char> hansChars = GetHansChars();
+        IReadOnlyList<char> hantChars = GetHantChars();
+        Console.WriteLine($"简体汉字：{hansChars.Count} 个");
+        Console.WriteLine($"繁体汉字：{hantChars.Count} 个");
+
+        chars.AddRange(hansChars);
+        chars.AddRange(hantChars);
+        chars = chars.Distinct().ToList();
+        Console.WriteLine($"合并去重后（未过滤）：{chars.Count} 个");
+
+        // 自检：替换方案下，游戏原字库的每个字都必须仍在清单里
+        {
+            HashSet<char> inList = [.. chars];
+            List<char> dropped = chineseChars.Where(c => !inList.Contains(c)).ToList();
+            if (dropped.Count > 0) {
+                throw new Exception(
+                    $"有 {dropped.Count} 个游戏原 Chinese 字库的字符不在生成清单里，"
+                    + "替换后它们会变成空白：" + string.Join(string.Empty, dropped.Take(200)));
+            }
+            Console.WriteLine($"覆盖自检通过：原字库 {chineseChars.Count} 个字符全部包含在内。");
         }
 
-        // Output the character count to console
-        Console.WriteLine($"Total characters: {chars.Count}");
+        // ---------------------------------------------------------------
+        // 第三部分：去掉游戏里"其他语言字体"已经提供的字符
+        // ---------------------------------------------------------------
+        ISet<int> providedByOtherFonts = ReadExcludeFile(ExcludeFileName);
 
-        // Output the characters to a txt file
-        using (StreamWriter writer = new($"TenThousandsCharsForSpriteFont{chars.Count}.txt", false, new UTF8Encoding(false))) {
+        List<char> removedChars = chars.Where(c => providedByOtherFonts.Contains(c)).ToList();
+        chars = chars.Where(c => !providedByOtherFonts.Contains(c)).ToList();
+
+        Console.WriteLine();
+        Console.WriteLine($"已在其他字体中提供、因此被移除的字符：{removedChars.Count} 个");
+        Console.WriteLine("  " + string.Join(string.Empty, removedChars));
+        Console.WriteLine();
+        Console.WriteLine($"最终字符数：{chars.Count}");
+
+        // ---------------------------------------------------------------
+        // 输出
+        // ---------------------------------------------------------------
+        const string baseName = "TenThousandsCharsForEmperorBattleForDune";
+
+        string plainPath = $"{baseName}{chars.Count}.txt";
+        using (StreamWriter writer = new(plainPath, false, new UTF8Encoding(false))) {
             foreach (char ch in chars) {
                 writer.Write(ch);
             }
         }
 
-        // Output the characters in a friendly format to a txt file
-        using (StreamWriter writer = new($"TenThousandsCharsForSpriteFont{chars.Count}_Friendly.txt", false, new UTF8Encoding(false))) {
+        string friendlyPath = $"{baseName}{chars.Count}_Friendly.txt";
+        using (StreamWriter writer = new(friendlyPath, false, new UTF8Encoding(false))) {
             foreach (char ch in chars) {
                 writer.Write(DisplayCharacter(ch));
                 writer.WriteLine();
             }
         }
 
+        string removedPath = $"{baseName}{chars.Count}_Removed.txt";
+        using (StreamWriter writer = new(removedPath, false, new UTF8Encoding(false))) {
+            writer.WriteLine($"# 以下 {removedChars.Count} 个字符已由其他字体（Korean / Standard / Small）提供，故未收录。");
+            foreach (char ch in removedChars) {
+                writer.Write(DisplayCharacter(ch));
+                writer.WriteLine();
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"已写出：{plainPath}");
+        Console.WriteLine($"        {friendlyPath}");
+        Console.WriteLine($"        {removedPath}");
     }
+
 }
