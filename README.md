@@ -43,4 +43,9 @@
 https://www.unicode.org/Public/1.1-Update/CJKXREF.TXT
 
 ### 七份非一一对应简繁字研究成果比较表
+
 陈明然. 七份非一一对应简繁字研究成果比较表[C]// 第十二次汉字书同文学术研讨会, 中国, 秦皇岛, 2009年8月.
+
+### OpenCC
+
+OpenCC 的 STCharacters 数据库中包含了简体中文和繁体中文的字符映射关系。

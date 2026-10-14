@@ -45,3 +45,7 @@ https://www.unicode.org/Public/1.1-Update/CJKXREF.TXT
 ### Comparison Table of Seven Research Results on Non-One-to-One Correspondences between Simplified and Traditional Chinese Characters
 
 CHEN, Mingran. *Comparison Table of Seven Research Results on Non-One-to-One Correspondences between Simplified and Traditional Chinese Characters*. Presented at the 12th Chinese Character Standardization Academic Seminar, Qinhuangdao, China, August 2009.
+
+### OpenCC
+
+OpenCC's STCharacters database contains the mapping relationship between Simplified Chinese and Traditional Chinese characters.
